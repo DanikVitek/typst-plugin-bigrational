@@ -63,10 +63,10 @@ Those functions can be used in Typst via the `rational.typ` file:
 ```typ
 import "rational.typ": *
 
-#let a = 2
-#let b = (1, 2)
+#let a = 2      // 2/1
+#let b = (1, 2) // 1/2
 
-#let sum = add(a, b)
+#let sum = add(a, b) // 5/2
 
 $#repr(sum)$
 ```
