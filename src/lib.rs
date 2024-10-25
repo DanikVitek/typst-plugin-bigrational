@@ -198,12 +198,18 @@ fn repr(numer: &[u8], denom: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
 }
 
 #[wasm_func]
-fn to_decimal_string(numer: &[u8], denom: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+fn to_decimal_string(
+    numer: &[u8],
+    denom: &[u8],
+    precision: &[u8],
+) -> Result<Vec<u8>, Box<dyn Error>> {
     let numer: BigInt = str::from_utf8(numer)?.parse()?;
     let denom: BigInt = str::from_utf8(denom)?.parse()?;
     let value = BigDecimal::new(numer, denom);
 
-    Ok(value.to_string().into_bytes())
+    let precision = usize::try_from(i64::from_le_bytes(precision.try_into()?))?;
+
+    Ok(format!("{value:#.precision$}").into_bytes())
 }
 
 #[wasm_func]

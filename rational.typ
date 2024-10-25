@@ -111,13 +111,17 @@
   }
 }
 
-#let to-decimal-str(x) = {
+#let to-decimal-str(x, precision: 8) = {
   let (numer, denom) = rational(x)
-  str(p.to_decimal_string(bytes(numer), bytes(denom)))
+  str(p.to_decimal_string(bytes(numer), bytes(denom), int.to-bytes(precision)))
 }
 
-#let to-float(x) = {
-  float(to-decimal-str(x))
+#let to-float(x, precision: 8) = {
+  float(to-decimal-str(x, precision: precision))
+}
+
+#let to-decimal(x, precision: 8) = {
+  decimal(to-decimal-str(x, precision: precision))
 }
 
 #let abs-diff(a, b) = {
