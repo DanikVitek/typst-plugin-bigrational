@@ -39,7 +39,11 @@ fn div(
 fn repr(numer: &[u8], denom: &[u8]) -> Result<Vec<u8>, Box<dyn Error>>;
 
 #[wasm_func]
-fn to_decimal_string(numer: &[u8], denom: &[u8]) -> Result<Vec<u8>, Box<dyn Error>>;
+fn to_decimal_string(
+    numer: &[u8],
+    denom: &[u8],
+    precision: &[u8],
+) -> Result<Vec<u8>, Box<dyn Error>>;
 
 #[wasm_func]
 fn abs_diff(
@@ -99,10 +103,13 @@ Functions, exported by the `rational.typ` file are:
 #let repr(x)
 
 // Returns a string, representing the rational number
-#let to-decimal-str(x)
+#let to-decimal-str(x, precision: 8)
 
 // Returns a floating-point number, representing the rational number
-#let to-float(x)
+#let to-float(x, precision: 8)
+
+// Returns a decimal number, representing the rational number
+#let to-decimal(x, precision: 8)
 
 // Returns |a - b|
 #let abs-diff(a, b)
