@@ -61,7 +61,7 @@ fn cmp(
 Those functions can be used in Typst via the `rational.typ` file:
 
 ```typ
-import "rational.typ": *
+#import "rational.typ": *
 
 #let a = 2      // 2/1
 #let b = (1, 2) // 1/2
