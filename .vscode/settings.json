@@ -1,5 +1,10 @@
 {
     "cSpell.words": [
-        "numer"
+        "biguint",
+        "fract",
+        "numer",
+        "recip",
+        "repr",
+        "trunc"
     ]
 }

@@ -1,9 +1,10 @@
 use core::str;
-use std::error::Error;
+use std::{array::TryFromSliceError, num::TryFromIntError, str::Utf8Error};
 
-use num_bigint::BigInt;
+use num_bigint::{BigInt, ParseBigIntError};
 use num_decimal::Num as BigDecimal;
 use num_rational::BigRational;
+use num_traits::{Signed, Zero};
 use wasm_minimal_protocol::*;
 
 initiate_protocol!();
@@ -25,20 +26,29 @@ impl RationalRepr {
                 bytes
             }
             RationalRepr::RationalLtOne(ratio) => {
-                let numer = ratio.numer().to_string();
-                let denom = ratio.denom().to_string();
-                let mut bytes = Vec::with_capacity(1 + 8 + numer.len() + 8 + denom.len());
+                let (numer, denom) = ratio.into_raw();
+
+                let (numer_sign, numer) = numer.into_parts();
+                let (denom_sign, denom) = denom.into_parts();
+                let sign = numer_sign * denom_sign;
+
+                let numer = numer.to_string();
+                let denom = denom.to_string();
+
+                let mut bytes = Vec::with_capacity(1 + 1 + 8 + numer.len() + 8 + denom.len());
                 bytes.push(1);
+                bytes.push(sign as u8);
                 bytes.extend_from_slice(&(numer.len() as i64).to_le_bytes());
                 bytes.extend_from_slice(numer.as_bytes());
                 bytes.extend_from_slice(&(denom.len() as i64).to_le_bytes());
                 bytes.extend_from_slice(denom.as_bytes());
                 bytes
             }
-            RationalRepr::RationalGtOne(big_int, ratio) => {
-                let s = big_int.to_string();
-                let numer = ratio.numer().to_string();
-                let denom = ratio.denom().to_string();
+            RationalRepr::RationalGtOne(int_part, frac_part) => {
+                let s = int_part.to_string();
+                let (numer, denom) = frac_part.into_raw();
+                let numer = numer.into_parts().1.to_string();
+                let denom = denom.into_parts().1.to_string();
                 let mut bytes =
                     Vec::with_capacity(1 + 8 + s.len() + 8 + numer.len() + 8 + denom.len());
                 bytes.push(2);
@@ -52,210 +62,349 @@ impl RationalRepr {
             }
         }
     }
-}
 
-impl From<BigInt> for RationalRepr {
-    fn from(big_int: BigInt) -> Self {
-        RationalRepr::Integer(big_int)
-    }
-}
-
-impl From<BigRational> for RationalRepr {
-    fn from(value: BigRational) -> Self {
-        if value.is_integer() {
-            RationalRepr::Integer(value.into_raw().0)
-        } else if value.numer() < value.denom() {
-            RationalRepr::RationalLtOne(value)
+    fn new(is_mixed: bool, number: BigRational) -> Self {
+        if number.is_integer() {
+            RationalRepr::Integer(number.into_raw().0)
+        } else if !is_mixed || number.numer().magnitude() < number.denom().magnitude() {
+            RationalRepr::RationalLtOne(number)
         } else {
-            let big_int = value.numer() / value.denom();
-            let ratio = value.fract();
+            let big_int = number.numer() / number.denom();
+            let ratio = number.fract();
             RationalRepr::RationalGtOne(big_int, ratio)
         }
     }
 }
 
-#[wasm_func]
-fn add(
-    a_numer: &[u8],
-    a_denom: &[u8],
-    b_numer: &[u8],
-    b_denom: &[u8],
-) -> Result<Vec<u8>, Box<dyn Error>> {
-    let a_numer: BigInt = str::from_utf8(a_numer)?.parse()?;
-    let a_denom: BigInt = str::from_utf8(a_denom)?.parse()?;
-    let a = BigRational::new(a_numer, a_denom);
-
-    let b_numer: BigInt = str::from_utf8(b_numer)?.parse()?;
-    let b_denom: BigInt = str::from_utf8(b_denom)?.parse()?;
-    let b = BigRational::new(b_numer, b_denom);
-
-    let c = a + b;
-    let c_numer = c.numer().to_string();
-    let c_denom = c.denom().to_string();
-
-    let mut result = Vec::with_capacity(8 + c_numer.len() + 8 + c_denom.len());
-    result.extend_from_slice(&(c_numer.len() as i64).to_le_bytes());
-    result.extend_from_slice(c_numer.as_bytes());
-    result.extend_from_slice(&(c_denom.len() as i64).to_le_bytes());
-    result.extend_from_slice(c_denom.as_bytes());
-
-    Ok(result)
+#[derive(Debug, thiserror::Error)]
+enum Error {
+    #[error("{0}")]
+    Utf8(
+        #[from]
+        #[source]
+        Utf8Error,
+    ),
+    #[error("{0}")]
+    ParseBigInt(
+        #[from]
+        #[source]
+        ParseBigIntError,
+    ),
+    #[error("Bool provided as more than 1 or 0 bytes (`is-mixed`)")]
+    IsMixedFromSlice(#[source] TryFromSliceError),
+    #[error("Failed to convert byte to bool (`is-mixed`)")]
+    IsMixedNotBool,
+    #[error("Integer provided as more or less than 8 bytes (`precision`)")]
+    PrecisionFromBytes(#[source] TryFromSliceError),
+    #[error("Integer provided as more or less than 8 bytes (`power`)")]
+    PowerFromBytes(#[source] TryFromSliceError),
+    #[error("Power must be less than or equal to {}, but was {0}", i32::MAX)]
+    PowerTooBig(i64),
+    #[error("Power must be greater than or equal to {}, but was {0}", i32::MIN)]
+    PowerTooSmall(i64),
+    #[error("Precision must be greater or equal to 0")]
+    PrecisionNegative(#[source] TryFromIntError),
+    #[error("Input too short: {0}")]
+    InputTooShort(#[from] InputTooShortError),
+    #[error("Division by zero")]
+    DivByZero,
+    #[error("`min` is greater than `max`")]
+    MinGreaterThanMax,
 }
 
 #[wasm_func]
-fn sub(
-    a_numer: &[u8],
-    a_denom: &[u8],
-    b_numer: &[u8],
-    b_denom: &[u8],
-) -> Result<Vec<u8>, Box<dyn Error>> {
-    let a_numer: BigInt = str::from_utf8(a_numer)?.parse()?;
-    let a_denom: BigInt = str::from_utf8(a_denom)?.parse()?;
-    let a = BigRational::new(a_numer, a_denom);
-
-    let b_numer: BigInt = str::from_utf8(b_numer)?.parse()?;
-    let b_denom: BigInt = str::from_utf8(b_denom)?.parse()?;
-    let b = BigRational::new(b_numer, b_denom);
-
-    let c = a - b;
-    let c_numer = c.numer().to_string();
-    let c_denom = c.denom().to_string();
-
-    let mut result = Vec::with_capacity(8 + c_numer.len() + 8 + c_denom.len());
-    result.extend_from_slice(&(c_numer.len() as i64).to_le_bytes());
-    result.extend_from_slice(c_numer.as_bytes());
-    result.extend_from_slice(&(c_denom.len() as i64).to_le_bytes());
-    result.extend_from_slice(c_denom.as_bytes());
-
-    Ok(result)
-}
-
-#[wasm_func]
-fn mul(
-    a_numer: &[u8],
-    a_denom: &[u8],
-    b_numer: &[u8],
-    b_denom: &[u8],
-) -> Result<Vec<u8>, Box<dyn Error>> {
-    let a_numer: BigInt = str::from_utf8(a_numer)?.parse()?;
-    let a_denom: BigInt = str::from_utf8(a_denom)?.parse()?;
-    let a = BigRational::new(a_numer, a_denom);
-
-    let b_numer: BigInt = str::from_utf8(b_numer)?.parse()?;
-    let b_denom: BigInt = str::from_utf8(b_denom)?.parse()?;
-    let b = BigRational::new(b_numer, b_denom);
-
-    let c = a * b;
-    let c_numer = c.numer().to_string();
-    let c_denom = c.denom().to_string();
-
-    let mut result = Vec::with_capacity(8 + c_numer.len() + 8 + c_denom.len());
-    result.extend_from_slice(&(c_numer.len() as i64).to_le_bytes());
-    result.extend_from_slice(c_numer.as_bytes());
-    result.extend_from_slice(&(c_denom.len() as i64).to_le_bytes());
-    result.extend_from_slice(c_denom.as_bytes());
-
-    Ok(result)
-}
-
-#[wasm_func]
-fn div(
-    a_numer: &[u8],
-    a_denom: &[u8],
-    b_numer: &[u8],
-    b_denom: &[u8],
-) -> Result<Vec<u8>, Box<dyn Error>> {
-    let a_numer: BigInt = str::from_utf8(a_numer)?.parse()?;
-    let a_denom: BigInt = str::from_utf8(a_denom)?.parse()?;
-    let a = BigRational::new(a_numer, a_denom);
-
-    let b_numer: BigInt = str::from_utf8(b_numer)?.parse()?;
-    let b_denom: BigInt = str::from_utf8(b_denom)?.parse()?;
-    let b = BigRational::new(b_numer, b_denom);
-
-    let c = a / b;
-    let c_numer = c.numer().to_string();
-    let c_denom = c.denom().to_string();
-
-    let mut result = Vec::with_capacity(8 + c_numer.len() + 8 + c_denom.len());
-    result.extend_from_slice(&(c_numer.len() as i64).to_le_bytes());
-    result.extend_from_slice(c_numer.as_bytes());
-    result.extend_from_slice(&(c_denom.len() as i64).to_le_bytes());
-    result.extend_from_slice(c_denom.as_bytes());
-
-    Ok(result)
-}
-
-#[wasm_func]
-fn repr(numer: &[u8], denom: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+fn rational(numer: &[u8], denom: &[u8]) -> Result<Vec<u8>, Error> {
     let numer: BigInt = str::from_utf8(numer)?.parse()?;
     let denom: BigInt = str::from_utf8(denom)?.parse()?;
-    let value = BigRational::new(numer, denom);
+    let number = BigRational::new(numer, denom);
 
-    let repr = RationalRepr::from(value);
+    Ok(big_ratio_to_bytes(number))
+}
+
+#[wasm_func]
+fn add(a: &[u8], b: &[u8]) -> Result<Vec<u8>, Error> {
+    let a = big_ratio_from_bytes(a)?;
+    let b = big_ratio_from_bytes(b)?;
+
+    Ok(big_ratio_to_bytes(a + b))
+}
+
+#[wasm_func]
+fn sub(a: &[u8], b: &[u8]) -> Result<Vec<u8>, Error> {
+    let a = big_ratio_from_bytes(a)?;
+    let b = big_ratio_from_bytes(b)?;
+
+    Ok(big_ratio_to_bytes(a - b))
+}
+
+#[wasm_func]
+fn mul(a: &[u8], b: &[u8]) -> Result<Vec<u8>, Error> {
+    let a = big_ratio_from_bytes(a)?;
+    let b = big_ratio_from_bytes(b)?;
+
+    Ok(big_ratio_to_bytes(a * b))
+}
+
+#[wasm_func]
+fn div(a: &[u8], b: &[u8]) -> Result<Vec<u8>, Error> {
+    let a = big_ratio_from_bytes(a)?;
+    let b = big_ratio_from_bytes(b)?;
+
+    Ok(big_ratio_to_bytes(a / b))
+}
+
+#[wasm_func]
+fn rem(a: &[u8], b: &[u8]) -> Result<Vec<u8>, Error> {
+    let a = big_ratio_from_bytes(a)?;
+    let b = big_ratio_from_bytes(b)?;
+
+    Ok(big_ratio_to_bytes(a % b))
+}
+
+#[wasm_func]
+fn abs_diff(a: &[u8], b: &[u8]) -> Result<Vec<u8>, Error> {
+    let a = big_ratio_from_bytes(a)?;
+    let b = big_ratio_from_bytes(b)?;
+
+    Ok(big_ratio_to_bytes((a - b).abs()))
+}
+
+#[wasm_func]
+fn cmp(a: &[u8], b: &[u8]) -> Result<Vec<u8>, Error> {
+    let a = big_ratio_from_bytes(a)?;
+    let b = big_ratio_from_bytes(b)?;
+
+    let result = a.cmp(&b) as i8 as i64;
+
+    Ok(result.to_le_bytes().to_vec())
+}
+
+#[wasm_func]
+fn neg(number: &[u8]) -> Result<Vec<u8>, Error> {
+    let number = big_ratio_from_bytes(number)?;
+
+    Ok(big_ratio_to_bytes(-number))
+}
+
+#[wasm_func]
+fn abs(number: &[u8]) -> Result<Vec<u8>, Error> {
+    let number = big_ratio_from_bytes(number)?;
+
+    Ok(big_ratio_to_bytes(number.abs()))
+}
+
+/// Rounds towards plus infinity.
+#[wasm_func]
+fn ceil(number: &[u8]) -> Result<Vec<u8>, Error> {
+    let number = big_ratio_from_bytes(number)?;
+
+    Ok(big_ratio_to_bytes(number.ceil()))
+}
+
+/// Rounds towards minus infinity.
+#[wasm_func]
+fn floor(number: &[u8]) -> Result<Vec<u8>, Error> {
+    let number = big_ratio_from_bytes(number)?;
+
+    Ok(big_ratio_to_bytes(number.floor()))
+}
+
+/// Rounds to the nearest integer. Rounds half-way cases away from zero.
+#[wasm_func]
+fn round(number: &[u8]) -> Result<Vec<u8>, Error> {
+    let number = big_ratio_from_bytes(number)?;
+
+    Ok(big_ratio_to_bytes(number.round()))
+}
+
+/// Rounds towards zero.
+#[wasm_func]
+fn trunc(number: &[u8]) -> Result<Vec<u8>, Error> {
+    let number = big_ratio_from_bytes(number)?;
+
+    Ok(big_ratio_to_bytes(number.trunc()))
+}
+
+/// Returns the fractional part of a number, with division rounded towards zero.
+///
+/// Satisfies `number == add(trunc(number), fract(number))`.
+#[wasm_func]
+fn fract(number: &[u8]) -> Result<Vec<u8>, Error> {
+    let number = big_ratio_from_bytes(number)?;
+
+    Ok(big_ratio_to_bytes(number.fract()))
+}
+
+/// Returns the reciprocal.
+///
+/// Returns error if the number is zero.
+#[wasm_func]
+fn recip(number: &[u8]) -> Result<Vec<u8>, Error> {
+    let number = big_ratio_from_bytes(number)?;
+    if number.is_zero() {
+        return Err(Error::DivByZero);
+    }
+    Ok(big_ratio_to_bytes(number.recip()))
+}
+
+/// Raises the Ratio to the power of an exponent.
+#[wasm_func]
+fn pow(number: &[u8], power: &[u8]) -> Result<Vec<u8>, Error> {
+    let number = big_ratio_from_bytes(number)?;
+
+    let power: i64 = i64::from_le_bytes(power.try_into().map_err(Error::PowerFromBytes)?);
+    let power: i32 = if power > i32::MAX as i64 {
+        return Err(Error::PowerTooBig(power));
+    } else if power < i32::MIN as i64 {
+        return Err(Error::PowerTooSmall(power));
+    } else {
+        power as i32
+    };
+
+    Ok(big_ratio_to_bytes(number.pow(power)))
+}
+
+/// Restrict a value to a certain interval.
+///
+/// Returns `max` if `number` is greater than `max`,
+/// and `min` if `number` is less than `min`.
+/// Otherwise returns `number`.
+///
+/// Returns error if `min` is greater than `max`.
+#[wasm_func]
+fn clamp(number: &[u8], min: &[u8], max: &[u8]) -> Result<Vec<u8>, Error> {
+    let number = big_ratio_from_bytes(number)?;
+    let min = big_ratio_from_bytes(min)?;
+    let max = big_ratio_from_bytes(max)?;
+
+    if min > max {
+        return Err(Error::MinGreaterThanMax);
+    }
+
+    Ok(big_ratio_to_bytes(number.clamp(min, max)))
+}
+
+/// Compares and returns the minimum of two values.
+#[wasm_func]
+fn min(a: &[u8], b: &[u8]) -> Result<Vec<u8>, Error> {
+    let a = big_ratio_from_bytes(a)?;
+    let b = big_ratio_from_bytes(b)?;
+
+    Ok(big_ratio_to_bytes(a.min(b)))
+}
+
+/// Compares and returns the maximum of two values.
+#[wasm_func]
+fn max(a: &[u8], b: &[u8]) -> Result<Vec<u8>, Error> {
+    let a = big_ratio_from_bytes(a)?;
+    let b = big_ratio_from_bytes(b)?;
+
+    Ok(big_ratio_to_bytes(a.max(b)))
+}
+
+/// Returns the string representation of the rational number.
+#[wasm_func]
+fn repr(number: &[u8], is_mixed: &[u8]) -> Result<Vec<u8>, Error> {
+    let [is_mixed] = <[u8; 1]>::try_from(is_mixed).map_err(Error::IsMixedFromSlice)?;
+    let is_mixed: bool = bool_try_from_byte(is_mixed).ok_or(Error::IsMixedNotBool)?;
+
+    let number = big_ratio_from_bytes(number)?;
+    let repr = RationalRepr::new(is_mixed, number);
 
     Ok(repr.into_bytes())
 }
 
 #[wasm_func]
-fn to_decimal_string(
-    numer: &[u8],
-    denom: &[u8],
-    precision: &[u8],
-) -> Result<Vec<u8>, Box<dyn Error>> {
-    let numer: BigInt = str::from_utf8(numer)?.parse()?;
-    let denom: BigInt = str::from_utf8(denom)?.parse()?;
-    let value = BigDecimal::new(numer, denom);
+fn numerator(number: &[u8]) -> Result<Vec<u8>, Error> {
+    let number = big_ratio_from_bytes(number)?;
+    let numer = number.numer().to_string();
 
-    let precision = usize::try_from(i64::from_le_bytes(precision.try_into()?))?;
-
-    Ok(format!("{value:#.precision$}").into_bytes())
+    Ok(numer.into_bytes())
 }
 
 #[wasm_func]
-fn abs_diff(
-    a_numer: &[u8],
-    a_denom: &[u8],
-    b_numer: &[u8],
-    b_denom: &[u8],
-) -> Result<Vec<u8>, Box<dyn Error>> {
-    let a_numer: BigInt = str::from_utf8(a_numer)?.parse()?;
-    let a_denom: BigInt = str::from_utf8(a_denom)?.parse()?;
-    let a = BigRational::new(a_numer, a_denom);
+fn denominator(number: &[u8]) -> Result<Vec<u8>, Error> {
+    let number = big_ratio_from_bytes(number)?;
+    let denom = number.denom().to_string();
 
-    let b_numer: BigInt = str::from_utf8(b_numer)?.parse()?;
-    let b_denom: BigInt = str::from_utf8(b_denom)?.parse()?;
-    let b = BigRational::new(b_numer, b_denom);
+    Ok(denom.into_bytes())
+}
 
-    let (c_numer, c_denom) = (a - b).into_raw();
-    let c_numer = c_numer.into_parts().1.to_string();
-    let c_denom = c_denom.into_parts().1.to_string();
-
-    let mut result = Vec::with_capacity(8 + c_numer.len() + 8 + c_denom.len());
-    result.extend_from_slice(&(c_numer.len() as i64).to_le_bytes());
-    result.extend_from_slice(c_numer.as_bytes());
-    result.extend_from_slice(&(c_denom.len() as i64).to_le_bytes());
-    result.extend_from_slice(c_denom.as_bytes());
-
-    Ok(result)
+fn bool_try_from_byte(byte: u8) -> Option<bool> {
+    match byte {
+        0 => Some(false),
+        1 => Some(true),
+        _ => None,
+    }
 }
 
 #[wasm_func]
-fn cmp(
-    a_numer: &[u8],
-    a_denom: &[u8],
-    b_numer: &[u8],
-    b_denom: &[u8],
-) -> Result<Vec<u8>, Box<dyn Error>> {
-    let a_numer: BigInt = str::from_utf8(a_numer)?.parse()?;
-    let a_denom: BigInt = str::from_utf8(a_denom)?.parse()?;
-    let a = BigRational::new(a_numer, a_denom);
+fn to_decimal_string(number: &[u8], precision: &[u8]) -> Result<Vec<u8>, Error> {
+    let number = big_ratio_from_bytes(number)?;
+    let (numer, denom) = number.into_raw();
+    let number = BigDecimal::new(numer, denom);
 
-    let b_numer: BigInt = str::from_utf8(b_numer)?.parse()?;
-    let b_denom: BigInt = str::from_utf8(b_denom)?.parse()?;
-    let b = BigRational::new(b_numer, b_denom);
+    let precision = usize::try_from(i64::from_le_bytes(
+        precision.try_into().map_err(Error::PrecisionFromBytes)?,
+    ))
+    .map_err(Error::PrecisionNegative)?;
 
-    let result = a.cmp(&b) as i8 as i64;
+    Ok(format!("{number:#.precision$}").into_bytes())
+}
 
-    Ok(result.to_le_bytes().to_vec())
+fn big_ratio_to_bytes(number: BigRational) -> Vec<u8> {
+    let (numer, denom) = number.into_raw();
+
+    let numer = numer.to_signed_bytes_le();
+    let denom = denom.to_signed_bytes_le();
+
+    let mut result =
+        Vec::with_capacity(size_of::<usize>() + numer.len() + size_of::<usize>() + denom.len());
+    result.extend_from_slice(&numer.len().to_le_bytes());
+    result.extend_from_slice(&numer);
+    result.extend_from_slice(&denom.len().to_le_bytes());
+    result.extend_from_slice(&denom);
+
+    result
+}
+
+fn big_ratio_from_bytes(bytes: &[u8]) -> Result<BigRational, Error> {
+    let numer_len = usize::from_le_bytes(
+        bytes
+            .get(..size_of::<usize>())
+            .ok_or(InputTooShortError::NumerLen)?
+            .try_into()
+            .unwrap(),
+    );
+    let numer = BigInt::from_signed_bytes_le(
+        bytes[size_of::<usize>()..]
+            .get(..numer_len)
+            .ok_or(InputTooShortError::Numer(numer_len))?,
+    );
+    let denom_len = usize::from_le_bytes(
+        bytes[size_of::<usize>() + numer_len..]
+            .get(..size_of::<usize>())
+            .ok_or(InputTooShortError::DenomLen)?
+            .try_into()
+            .unwrap(),
+    );
+    let denom = BigInt::from_signed_bytes_le(
+        bytes[size_of::<usize>() + numer_len + size_of::<usize>()..]
+            .get(..denom_len)
+            .ok_or(InputTooShortError::Denom(denom_len))?,
+    );
+
+    Ok(BigRational::new_raw(numer, denom))
+}
+
+#[derive(Debug, thiserror::Error)]
+enum InputTooShortError {
+    #[error("Numerator length")]
+    NumerLen,
+    #[error("Numerator value (needs {0} bytes)")]
+    Numer(usize),
+    #[error("Denominator length")]
+    DenomLen,
+    #[error("Denominator value (needs {0} bytes)")]
+    Denom(usize),
 }

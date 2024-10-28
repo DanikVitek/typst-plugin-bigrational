@@ -1,6 +1,6 @@
 [package]
 name = "typst-plugin-bigrational"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 
 [lib]
@@ -17,4 +17,6 @@ panic = "abort"
 num-bigint = "0.4.6"
 num-decimal = { version = "0.2.5", default-features = false, features = ["num-v04"] }
 num-rational = "0.4.2"
+num-traits = "0.2.19"
+thiserror = "1.0.65"
 wasm-minimal-protocol = "0.1.0"
