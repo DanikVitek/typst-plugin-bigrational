@@ -7,8 +7,6 @@ use num_rational::BigRational;
 use num_traits::{Signed, Zero};
 use wasm_minimal_protocol::*;
 
-initiate_protocol!();
-
 enum RationalRepr {
     Integer(BigInt),
     RationalLtOne(BigRational),
@@ -112,6 +110,8 @@ enum Error {
     MinGreaterThanMax,
 }
 
+initiate_protocol!();
+
 #[wasm_func]
 fn rational(numer: &[u8], denom: &[u8]) -> Result<Vec<u8>, Error> {
     let numer: BigInt = str::from_utf8(numer)?.parse()?;
@@ -121,53 +121,39 @@ fn rational(numer: &[u8], denom: &[u8]) -> Result<Vec<u8>, Error> {
     Ok(big_ratio_to_bytes(number))
 }
 
-#[wasm_func]
-fn add(a: &[u8], b: &[u8]) -> Result<Vec<u8>, Error> {
-    let a = big_ratio_from_bytes(a)?;
-    let b = big_ratio_from_bytes(b)?;
+macro_rules! impl_bin_op {
+    ($($(#[$meta:meta])* $name:ident($op1:ident, $op2:ident) => $e:expr);*$(;)?) => {
+        $(
+            $(#[$meta])*
+            #[wasm_func]
+            fn $name($op1: &[u8], $op2: &[u8]) -> Result<Vec<u8>, Error> {
+                let $op1 = big_ratio_from_bytes($op1)?;
+                let $op2 = big_ratio_from_bytes($op2)?;
 
-    Ok(big_ratio_to_bytes(a + b))
+                Ok(big_ratio_to_bytes($e))
+            }
+        )*
+    };
 }
 
-#[wasm_func]
-fn sub(a: &[u8], b: &[u8]) -> Result<Vec<u8>, Error> {
-    let a = big_ratio_from_bytes(a)?;
-    let b = big_ratio_from_bytes(b)?;
-
-    Ok(big_ratio_to_bytes(a - b))
-}
-
-#[wasm_func]
-fn mul(a: &[u8], b: &[u8]) -> Result<Vec<u8>, Error> {
-    let a = big_ratio_from_bytes(a)?;
-    let b = big_ratio_from_bytes(b)?;
-
-    Ok(big_ratio_to_bytes(a * b))
-}
-
-#[wasm_func]
-fn div(a: &[u8], b: &[u8]) -> Result<Vec<u8>, Error> {
-    let a = big_ratio_from_bytes(a)?;
-    let b = big_ratio_from_bytes(b)?;
-
-    Ok(big_ratio_to_bytes(a / b))
-}
-
-#[wasm_func]
-fn rem(a: &[u8], b: &[u8]) -> Result<Vec<u8>, Error> {
-    let a = big_ratio_from_bytes(a)?;
-    let b = big_ratio_from_bytes(b)?;
-
-    Ok(big_ratio_to_bytes(a % b))
-}
-
-#[wasm_func]
-fn abs_diff(a: &[u8], b: &[u8]) -> Result<Vec<u8>, Error> {
-    let a = big_ratio_from_bytes(a)?;
-    let b = big_ratio_from_bytes(b)?;
-
-    Ok(big_ratio_to_bytes((a - b).abs()))
-}
+impl_bin_op!(
+    /// Add two rational numbers
+    add(a, b) => a + b;
+    /// Subtract two rational numbers
+    sub(a, b) => a - b;
+    /// Multiply two rational numbers
+    mul(a, b) => a * b;
+    /// Divide two rational numbers
+    div(a, b) => a / b;
+    /// Remainder of two rational numbers
+    rem(a, b) => a % b;
+    /// Absolute difference of two rational numbers
+    abs_diff(a, b) => (a - b).abs();
+    /// Compares and returns the minimum of two values.
+    min(a, b) => a.min(b);
+    /// Compares and returns the maximum of two values.
+    max(a, b) => a.max(b);
+);
 
 #[wasm_func]
 fn cmp(a: &[u8], b: &[u8]) -> Result<Vec<u8>, Error> {
@@ -179,60 +165,36 @@ fn cmp(a: &[u8], b: &[u8]) -> Result<Vec<u8>, Error> {
     Ok(result.to_le_bytes().to_vec())
 }
 
-#[wasm_func]
-fn neg(number: &[u8]) -> Result<Vec<u8>, Error> {
-    let number = big_ratio_from_bytes(number)?;
-
-    Ok(big_ratio_to_bytes(-number))
+macro_rules! impl_un_op {
+    ($($(#[$meta:meta])* $name:ident($op:ident) => $e:expr);*$(;)?) => {
+        $(
+            $(#[$meta])*
+            #[wasm_func]
+            fn $name($op: &[u8]) -> Result<Vec<u8>, Error> {
+                let $op = big_ratio_from_bytes($op)?;
+                Ok(big_ratio_to_bytes($e))
+            }
+        )*
+    };
 }
 
-#[wasm_func]
-fn abs(number: &[u8]) -> Result<Vec<u8>, Error> {
-    let number = big_ratio_from_bytes(number)?;
-
-    Ok(big_ratio_to_bytes(number.abs()))
-}
-
-/// Rounds towards plus infinity.
-#[wasm_func]
-fn ceil(number: &[u8]) -> Result<Vec<u8>, Error> {
-    let number = big_ratio_from_bytes(number)?;
-
-    Ok(big_ratio_to_bytes(number.ceil()))
-}
-
-/// Rounds towards minus infinity.
-#[wasm_func]
-fn floor(number: &[u8]) -> Result<Vec<u8>, Error> {
-    let number = big_ratio_from_bytes(number)?;
-
-    Ok(big_ratio_to_bytes(number.floor()))
-}
-
-/// Rounds to the nearest integer. Rounds half-way cases away from zero.
-#[wasm_func]
-fn round(number: &[u8]) -> Result<Vec<u8>, Error> {
-    let number = big_ratio_from_bytes(number)?;
-
-    Ok(big_ratio_to_bytes(number.round()))
-}
-
-/// Rounds towards zero.
-#[wasm_func]
-fn trunc(number: &[u8]) -> Result<Vec<u8>, Error> {
-    let number = big_ratio_from_bytes(number)?;
-
-    Ok(big_ratio_to_bytes(number.trunc()))
-}
-
-/// Returns the fractional part of a number, with division rounded towards zero.
-///
-/// Satisfies `number == add(trunc(number), fract(number))`.
-#[wasm_func]
-fn fract(number: &[u8]) -> Result<Vec<u8>, Error> {
-    let number = big_ratio_from_bytes(number)?;
-
-    Ok(big_ratio_to_bytes(number.fract()))
+impl_un_op! {
+    /// Returns the negation of the number.
+    neg(x) => -x;
+    /// Returns the absolute value of the number.
+    abs(x) => x.abs();
+    /// Rounds towards minus infinity.
+    floor(x) => x.floor();
+    /// Rounds towards plus infinity.
+    ceil(x) => x.ceil();
+    /// Rounds to the nearest integer. Rounds half-way cases away from zero.
+    round(x) => x.round();
+    /// Rounds towards zero.
+    trunc(x) => x.trunc();
+    /// Returns the fractional part of a number, with division rounded towards zero.
+    ///
+    /// Satisfies `x == add(trunc(x), fract(x))`.
+    fract(x) => x.fract();
 }
 
 /// Returns the reciprocal.
@@ -282,24 +244,6 @@ fn clamp(number: &[u8], min: &[u8], max: &[u8]) -> Result<Vec<u8>, Error> {
     }
 
     Ok(big_ratio_to_bytes(number.clamp(min, max)))
-}
-
-/// Compares and returns the minimum of two values.
-#[wasm_func]
-fn min(a: &[u8], b: &[u8]) -> Result<Vec<u8>, Error> {
-    let a = big_ratio_from_bytes(a)?;
-    let b = big_ratio_from_bytes(b)?;
-
-    Ok(big_ratio_to_bytes(a.min(b)))
-}
-
-/// Compares and returns the maximum of two values.
-#[wasm_func]
-fn max(a: &[u8], b: &[u8]) -> Result<Vec<u8>, Error> {
-    let a = big_ratio_from_bytes(a)?;
-    let b = big_ratio_from_bytes(b)?;
-
-    Ok(big_ratio_to_bytes(a.max(b)))
 }
 
 /// Returns the string representation of the rational number.
