@@ -122,9 +122,9 @@ fn rational(numer: &[u8], denom: &[u8]) -> Result<Vec<u8>, Error> {
 }
 
 macro_rules! impl_bin_op {
-    ($($(#[$meta:meta])* $name:ident($op1:ident, $op2:ident) => $e:expr);*$(;)?) => {
+    ($($(#[$($meta:tt)*])* $name:ident($op1:ident, $op2:ident) => $e:expr);*$(;)?) => {
         $(
-            $(#[$meta])*
+            $(#[$($meta)*])*
             #[wasm_func]
             fn $name($op1: &[u8], $op2: &[u8]) -> Result<Vec<u8>, Error> {
                 let $op1 = big_ratio_from_bytes($op1)?;
@@ -166,9 +166,9 @@ fn cmp(a: &[u8], b: &[u8]) -> Result<Vec<u8>, Error> {
 }
 
 macro_rules! impl_un_op {
-    ($($(#[$meta:meta])* $name:ident($op:ident) => $e:expr);*$(;)?) => {
+    ($($(#[$($meta:tt)*])* $name:ident($op:ident) => $e:expr);*$(;)?) => {
         $(
-            $(#[$meta])*
+            $(#[$($meta)*])*
             #[wasm_func]
             fn $name($op: &[u8]) -> Result<Vec<u8>, Error> {
                 let $op = big_ratio_from_bytes($op)?;
